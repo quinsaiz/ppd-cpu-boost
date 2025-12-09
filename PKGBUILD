@@ -14,8 +14,8 @@ source=("${pkgname}-${pkgver}.tar.gz::https://github.com/quinsaiz/${pkgname}/arc
 
 install=${pkgname}.install
 
-sha256sums=('SKIP'
-            'SKIP')
+sha256sums=('d3b402d08b25b92a7ce750b5739ef52beef962ffd76d22cffd383bbc9356646a'
+            '2e79e0d03937ca2b8db3b1c1b37e52ad3e5c65522919b9204486425d789946d7')
 
 prepare() {
     cd "${srcdir}/${pkgname}-${pkgver}"
@@ -27,4 +27,5 @@ package() {
 
     install -m 755 "${srcdir}/${pkgname}-${pkgver}/ppd-cpu-boost" "${pkgdir}/usr/bin/"
     install -m 644 "${srcdir}/${pkgname}-${pkgver}/ppd-cpu-boost.service" "${pkgdir}/usr/lib/systemd/system/"
+    install -D -m 644 "${srcdir}/${pkgname}-${pkgver}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }
