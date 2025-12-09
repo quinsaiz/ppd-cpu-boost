@@ -1,6 +1,6 @@
 [Unit]
 Description=CPU turbo boost sync with power-profiles-daemon
-After=power-profiles-daemon.service
+After=power-profiles-daemon.service logind.service
 Requires=power-profiles-daemon.service
 
 [Service]

@@ -1,7 +1,7 @@
 # Maintainer: quinsaiz <edgood228@gmail.com>
 pkgname=ppd-cpu-boost
-pkgver=1.0.1
-pkgrel=2
+pkgver=1.0.2
+pkgrel=1
 pkgdesc="Systemd service to synchronize CPU Turbo Boost state with power-profiles-daemon."
 arch=('any')
 url="https://github.com/quinsaiz/ppd-cpu-boost"
