@@ -14,7 +14,7 @@ source=("${pkgname}-${pkgver}.tar.gz::https://github.com/quinsaiz/${pkgname}/arc
 
 install=${pkgname}.install
 
-sha256sums=('f8d2488aa9ba0c34f28e0b3321cc92a09d13858aeb862209c49e07a7d09268a1'
+sha256sums=('3d9989e65c81b2aab653aa92972f4874a5a7774504bcd36dc76f4d1576fdbfb1'
             '2e79e0d03937ca2b8db3b1c1b37e52ad3e5c65522919b9204486425d789946d7')
 
 prepare() {
