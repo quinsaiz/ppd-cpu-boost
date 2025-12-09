@@ -1,7 +1,7 @@
 # Maintainer: quinsaiz <edgood228@gmail.com>
 pkgname=ppd-cpu-boost
 pkgver=1.0.1
-pkgrel=1
+pkgrel=2
 pkgdesc="Systemd service to synchronize CPU Turbo Boost state with power-profiles-daemon."
 arch=('any')
 url="https://github.com/quinsaiz/ppd-cpu-boost"
@@ -14,7 +14,7 @@ source=("${pkgname}-${pkgver}.tar.gz::https://github.com/quinsaiz/${pkgname}/arc
 
 install=${pkgname}.install
 
-sha256sums=('d3b402d08b25b92a7ce750b5739ef52beef962ffd76d22cffd383bbc9356646a'
+sha256sums=('f8d2488aa9ba0c34f28e0b3321cc92a09d13858aeb862209c49e07a7d09268a1'
             '2e79e0d03937ca2b8db3b1c1b37e52ad3e5c65522919b9204486425d789946d7')
 
 prepare() {
