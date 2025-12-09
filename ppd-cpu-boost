@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+from gi.repository import GLib, Gio
+
+BOOST_FILE = None
+BOOST_ENABLED_VALUE = None
+BOOST_DISABLED_VALUE = None
+
+def detect_cpu_paths():
+    global BOOST_FILE, BOOST_ENABLED_VALUE, BOOST_DISABLED_VALUE
+
+    INTEL_PATH = "/sys/devices/system/cpu/intel_pstate/no_turbo"
+    if os.path.exists(INTEL_PATH):
+        BOOST_FILE = INTEL_PATH
+        BOOST_ENABLED_VALUE = "0"
+        BOOST_DISABLED_VALUE = "1"
+        print(f"[PPD Boost] DETECTED: Intel (intel_pstate) path: {BOOST_FILE}")
+        return
+        
+    AMD_PATH = "/sys/devices/system/cpu/cpufreq/boost"
+    if os.path.exists(AMD_PATH):
+        BOOST_FILE = AMD_PATH
+        BOOST_ENABLED_VALUE = "1"
+        BOOST_DISABLED_VALUE = "0"
+        print(f"[PPD Boost] DETECTED: AMD/Generic (cpufreq) path: {BOOST_FILE}")
+        return
+
+    print(f"[PPD Boost] CRITICAL: Could not find supported CPU Boost/Turbo control file.")
+    sys.exit(1)
+
+
+def set_boost(enabled):
+    if not BOOST_FILE or not BOOST_ENABLED_VALUE or not BOOST_DISABLED_VALUE:
+        print(f"[PPD Boost] ERROR: CPU control file not initialized.")
+        return
+
+    val = BOOST_ENABLED_VALUE if enabled else BOOST_DISABLED_VALUE
+    
+    try:
+        with open(BOOST_FILE, "r") as f:
+            current = f.read().strip()
+        
+        if current != val:
+            with open(BOOST_FILE, "w") as f:
+                f.write(val)
+            print(f"[PPD Boost] ACTION: Set boost to {val} (File: {BOOST_FILE})")
+        else:
+            print(f"[PPD Boost] INFO: Boost is already set to {val}, skipping write.")
+            
+    except IOError as e:
+        print(f"[PPD Boost] ERROR: Writing to {BOOST_FILE}: {e}")
+    except Exception as e:
+         print(f"[PPD Boost] UNEXPECTED ERROR in set_boost: {e}")
+
+
+def on_signal(connection, sender_name, object_path, interface_name, signal_name, parameters, user_data):
+    try:
+        if signal_name == "PropertiesChanged":
+            changed_props = parameters.get_child_value(1).unpack()
+            
+            if "ActiveProfile" in changed_props:
+                new_profile = changed_props["ActiveProfile"]
+                print(f"[PPD Boost] SIGNAL: Detected profile change to '{new_profile}'")
+                set_boost(new_profile == "performance")
+    except Exception as e:
+        print(f"[PPD Boost] ERROR processing signal: {e}")
+
+
+def main():
+    detect_cpu_paths()
+
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+    except Exception as e:
+        print(f"[PPD Boost] CRITICAL: Cannot connect to system bus: {e}")
+        sys.exit(1)
+
+    try:
+        result = bus.call_sync(
+            "net.hadess.PowerProfiles",
+            "/net/hadess/PowerProfiles",
+            "org.freedesktop.DBus.Properties",
+            "Get",
+            GLib.Variant("(ss)", ("net.hadess.PowerProfiles", "ActiveProfile")),
+            GLib.VariantType("(v)"),
+            Gio.DBusCallFlags.NONE,
+            -1,
+            None
+        )
+        current_profile = result.get_child_value(0).get_variant().get_string()
+        print(f"[PPD Boost] STARTUP: Current profile is '{current_profile}'")
+        set_boost(current_profile == "performance")
+        
+    except Exception as e:
+        print(f"[PPD Boost] WARNING: Could not get initial profile (daemon might be down): {e}")
+
+    bus.signal_subscribe(
+        "net.hadess.PowerProfiles",
+        "org.freedesktop.DBus.Properties",
+        "PropertiesChanged",
+        "/net/hadess/PowerProfiles",
+        None,
+        Gio.DBusSignalFlags.NONE,
+        on_signal,
+        None
+    )
+
+    print("[PPD Boost] SERVICE: Listening for power profile changes...")
+    
+    loop = GLib.MainLoop()
+    try:
+        loop.run()
+    except KeyboardInterrupt:
+        pass
+
+if __name__ == "__main__":
+    main()

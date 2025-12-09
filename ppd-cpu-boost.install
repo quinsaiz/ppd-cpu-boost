@@ -1,0 +1,20 @@
+post_install() {
+    echo "Activation of the ppd-cpu-boost.service..."
+    
+    /usr/bin/systemctl daemon-reload
+    /usr/bin/systemctl enable --now ppd-cpu-boost.service >/dev/null 2>&1 || :
+}
+
+pre_remove() {
+    echo "Stop and disable the ppd-cpu-boost.service service before removal..."
+
+    /usr/bin/systemctl stop ppd-cpu-boost.service
+    /usr/bin/systemctl disable ppd-cpu-boost.service >/dev/null 2>&1 || :
+}
+
+post_upgrade() {
+    echo "Updating ppd-cpu-boost.service. Restarting..."
+    
+    /usr/bin/systemctl daemon-reload
+    /usr/bin/systemctl restart ppd-cpu-boost.service || :
+}
