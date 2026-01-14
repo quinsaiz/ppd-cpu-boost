@@ -1,13 +1,13 @@
 post_install() {
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl enable --now ppd-cpu-boost.service >/dev/null 2>&1 || true
+    systemctl daemon-reload
+    systemctl enable --now ppd-cpu-boost.service 2>/dev/null || true
 }
 
 post_upgrade() {
-    systemctl daemon-reload >/dev/null 2>&1 || true
-    systemctl try-restart ppd-cpu-boost.service >/dev/null 2>&1 || true
+    systemctl daemon-reload
+    systemctl try-restart ppd-cpu-boost.service 2>/dev/null || true
 }
 
 pre_remove() {
-    systemctl disable --now ppd-cpu-boost.service >/dev/null 2>&1 || true
+    systemctl disable --now ppd-cpu-boost.service 2>/dev/null || true
 }
