@@ -33,7 +33,9 @@ Once packaged, users can install via an AUR helper (e.g., `yay` or `paru`).
 
 1. **Clone the PKGBUILD repository:**
     ```bash
-   git clone https://aur.archlinux.org/ppd-cpu-boost.git && cd ppd-cpu-boost
+   git clone https://aur.archlinux.org/ppd-cpu-boost.git
+   
+   cd ppd-cpu-boost
    ```
 
 2. Build and Install (using makepkg -si to clean up source files):
