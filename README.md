@@ -32,10 +32,8 @@ The script automatically detects the CPU architecture and uses the appropriate c
 Once packaged, users can install via an AUR helper (e.g., `yay` or `paru`).
 
 1. **Clone the PKGBUILD repository:**
-   ```bash
-   git clone https://aur.archlinux.org/ppd-cpu-boost.git
-
-   cd ppd-cpu-boost
+    ```bash
+   git clone https://aur.archlinux.org/ppd-cpu-boost.git && cd ppd-cpu-boost
    ```
 
 2. Build and Install (using makepkg -si to clean up source files):
@@ -43,7 +41,10 @@ Once packaged, users can install via an AUR helper (e.g., `yay` or `paru`).
     makepkg -si
     ```
 
-The service is automatically enabled after installation via the pacman hook
+3. Activate a service in systemd
+    ```bash
+    sudo systemctl enable --now ppd-cpu-boost.service
+    ```
 
 ### II. Manual Installation
 

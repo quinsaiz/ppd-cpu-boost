@@ -43,6 +43,44 @@ create_arch_archive() {
     return 0
 }
 
+check_dependencies() {
+    local missing=0
+
+    echo "Checking dependencies..."
+
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo "ERROR: systemd is not installed (systemctl not found)"
+        missing=1
+    fi
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "ERROR: python3 is not installed"
+        missing=1
+    fi
+
+    if ! python3 - <<'EOF' >/dev/null 2>&1
+import gi
+EOF
+    then
+        echo "ERROR: python3-gobject (gi) is not installed"
+        missing=1
+    fi
+
+    if ! systemctl list-unit-files | grep -q power-profiles-daemon; then
+        echo "ERROR: power-profiles-daemon is not installed"
+        missing=1
+    fi
+
+    if [ "$missing" -ne 0 ]; then
+        echo
+        echo "Please install missing dependencies and try again."
+        exit 1
+    fi
+
+    echo "All dependencies are satisfied."
+}
+
+
 case "$1" in
     -u|--uninstall)
         echo "Stopping and removing the service..."
@@ -64,6 +102,8 @@ case "$1" in
 
 
     *)
+        check_dependencies
+
         echo "Performing manual installation..."
 
         echo "Copying $SCRIPT_NAME to $INSTALL_DIR..."
