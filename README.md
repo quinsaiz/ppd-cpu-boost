@@ -1,88 +1,81 @@
-# Power Profiles Daemon CPU Boost Sync
+# PPD CPU Boost Sync
 
-The systemd service, which automatically synchronizes CPU Turbo Boost settings with the active power profile set `power-profiles-daemon`.
+A systemd service that automatically synchronizes CPU Turbo Boost with the active "power-profiles-daemon" profile.
 
-This provides instant and energy-efficient switching between modes.
+_Not applicable to AMD processors with "amd-pstate = active"._
 
 ## How it works
 
-The script automatically detects the CPU architecture and uses the appropriate control file and logic.
+The script detects the CPU architecture and selects the appropriate sysfs control file:
 
-| CPU | Control File | Logic |
-| :--- | :--- | :--- |
-| **AMD** (cpufreq) | `/sys/devices/system/cpu/cpufreq/boost` | `1` = Boost ON
-| **Intel** (intel_pstate) | `/sys/devices/system/cpu/intel_pstate/no_turbo` | `0` = Turbo ON
+| CPU                  | Control File                                    | Logic           |
+|:---------------------|:------------------------------------------------|:----------------|
+| AMD (cpufreq)        | `/sys/devices/system/cpu/cpufreq/boost`         | `1` = Boost on  |
+| Intel (intel_pstate) | `/sys/devices/system/cpu/intel_pstate/no_turbo` | `0` = Turbo off |
 
 ### Profile Logic
 
-| PPD Profile (`powerprofilesctl`) | Action | Effect |
-| :--- | :--- | :--- |
-| `performance` | Enable Boost/Turbo | Maximum CPU performance. |
-| `balanced` or `power-saver` | Disable Boost/Turbo | Reduced heat and power consumption. |
+| PPD Profile                | Action              | Effect                          |
+|:---------------------------|:--------------------|:--------------------------------|
+| `performance`              | Enable Boost/Turbo  | Maximum performance             |
+| `balanced` / `power-saver` | Disable Boost/Turbo | Less heat and power consumption |
 
 ## Requirements
+
+_They are usually preinstalled on most systems._
+
 - python
 - python-gobject
 - power-profiles-daemon
 
+---
+
 ## Installation
 
-### I. Arch Linux / AUR (Recommended)
+### Arch Linux (AUR)
 
-Once packaged, users can install via an AUR helper (e.g., `yay` or `paru`).
-
-1. **Clone the PKGBUILD repository:**
-    ```bash
-   git clone https://aur.archlinux.org/ppd-cpu-boost.git
-   
-   cd ppd-cpu-boost
-   ```
-
-2. Build and Install (using makepkg -si to clean up source files):
-    ```bash
-    makepkg -si
-    ```
-
-3. Activate a service in systemd
-    ```bash
-    sudo systemctl enable --now ppd-cpu-boost.service
-    ```
-
-### II. Manual Installation
-
-1. **Use the provided `install.sh` script for manual setup.**
-    Clone the repository:
-    ```bash
-    git clone https://github.com/quinsaiz/ppd-cpu-boost.git
-
-    cd ppd-cpu-boost
-    ```
-
-2. **Install (requires root privileges):**
-    ```bash
-    sudo ./install.sh
-    ```
-
-## Uninstallation
-
-| Method | Command |
-| :--- | :--- |
-| Pacman | `sudo pacman -R ppd-cpu-boost`
-| Manual | `sudo ./install.sh --uninstall` or `sudo ./install.sh -u`
-
-## Usage and Diagnostics
-
-Check Service Status:
 ```bash
+git clone https://aur.archlinux.org/ppd-cpu-boost.git && \
+cd ppd-cpu-boost && \
+makepkg -si
+```
+
+The service is activated automatically after installation. If you need to enable it manually:
+
+```bash
+sudo systemctl enable --now ppd-cpu-boost.service
+```
+
+### Manual
+
+```bash
+git clone https://github.com/quinsaiz/ppd-cpu-boost.git && \
+cd ppd-cpu-boost && \
+chmod +x install.sh && \
+sudo ./install.sh
+```
+
+### Uninstallation
+
+```bash
+# AUR
+sudo pacman -Rns ppd-cpu-boost
+
+# Manual
+sudo ./install.sh --uninstall
+```
+
+---
+
+## Diagnostics
+
+```bash
+# Service Status
 systemctl status ppd-cpu-boost
-```
 
-View Logs (Real-time):
-```bash
+# Real-time logs
 sudo journalctl -u ppd-cpu-boost -f
-```
 
-Verify the Effect (e.g., on AMD systems):
-```bash
+# Verifying the effect (example for AMD)
 watch -n1 cat /sys/devices/system/cpu/cpufreq/boost
 ```
