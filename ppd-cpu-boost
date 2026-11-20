@@ -1,206 +1,328 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3
 
-import sys
-import os
+import asyncio
 import logging
-from gi.repository import GLib, Gio
+import os
+import signal
+import sys
+from typing import ClassVar
 
-_log_level = logging.DEBUG if os.environ.get("PPD_BOOST_DEBUG") == "1" else logging.INFO
+from dbus_fast import BusType, DBusError, Message, MessageType
+from dbus_fast.aio import MessageBus
+
+LOG_LEVEL = logging.DEBUG if os.environ.get("PPD_BOOST_DEBUG") == "1" else logging.INFO
 logging.basicConfig(
-    level=_log_level,
-    format="%(levelname)s: %(message)s"
+    level=LOG_LEVEL,
+    format="[%(levelname)s] %(message)s",
 )
+logger = logging.getLogger("ppd-cpu-boost")
 
 
 class PPDBoostSync:
-    DBUS_CANDIDATES = [
+    DBUS_CANDIDATES = (
         "org.freedesktop.UPower.PowerProfiles",
-        "net.hadess.PowerProfiles"
-    ]
+        "net.hadess.PowerProfiles",
+    )
+    BOOST_PATH = "/sys/devices/system/cpu/cpufreq/boost"
+    DBUS_SERVICE = "org.freedesktop.DBus"
+    DBUS_PATH = "/org/freedesktop/DBus"
+    DBUS_INTERFACE = "org.freedesktop.DBus"
+    LOGIN1_NAME = "org.freedesktop.login1"
+    LOGIN1_PATH = "/org/freedesktop/login1"
+    LOGIN1_INTERFACE = "org.freedesktop.login1.Manager"
+    PROFILE_POLICY: ClassVar[dict[str, bool]] = {
+        "performance": True,
+        "balanced": False,
+        "power-saver": False,
+    }
 
-    def __init__(self):
-        self.boost_file = None
-        self.enabled_value = None
-        self.disabled_value = None
-        self.dbus_name = None
-        self.object_path = None
-
+    def __init__(self) -> None:
         self._check_root()
-        self._detect_cpu_paths()
-        self._check_amd_pstate_active()
-        self.bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        self._detect_dbus_namespace()
+        self._check_amd_cpu()
+        self._check_boost_control()
+
+        self.bus: MessageBus | None = None
+        self.dbus_name: str = ""
+        self.object_path: str = ""
+        self._resume_task: asyncio.Task[None] | None = None
 
     @staticmethod
-    def _check_root():
-        """Ensure the script is running with elevated privileges."""
+    def _check_root() -> None:
         if os.geteuid() != 0:
-            logging.critical("This script must be run as root to write to sysfs.")
-            sys.exit(1)
-
-    def _detect_cpu_paths(self):
-        """Detect CPU architecture and set appropriate sysfs paths."""
-        intel_path = "/sys/devices/system/cpu/intel_pstate/no_turbo"
-        if os.path.exists(intel_path):
-            self.boost_file = intel_path
-            self.enabled_value = "0"
-            self.disabled_value = "1"
-            logging.debug("Detected Intel (intel_pstate) path: %s", self.boost_file)
-            return
-
-        amd_path = "/sys/devices/system/cpu/cpufreq/boost"
-        if os.path.exists(amd_path):
-            self.boost_file = amd_path
-            self.enabled_value = "1"
-            self.disabled_value = "0"
-            logging.debug("Detected AMD/Generic (cpufreq) path: %s", self.boost_file)
-            return
-
-        logging.critical("Could not find supported CPU Boost/Turbo control file.")
-        sys.exit(1)
+            raise RuntimeError("Must run as root to change CPU boost through sysfs")
 
     @staticmethod
-    def _check_amd_pstate_active():
-        """Skip execution if amd_pstate is in 'active' (EPP) mode.
-        In this mode, power-profiles-daemon handles core boost natively,
-        and external sysfs boost writes will corrupt its state.
-        """
-        status_path = "/sys/devices/system/cpu/amd_pstate/status"
-        if os.path.exists(status_path):
+    def _check_amd_cpu() -> None:
+        try:
+            with open("/proc/cpuinfo", encoding="ascii") as cpuinfo:
+                is_amd = any(
+                    line.startswith("vendor_id")
+                    and line.split(":", 1)[1].strip() == "AuthenticAMD"
+                    for line in cpuinfo
+                )
+        except OSError as exc:
+            raise RuntimeError(f"Cannot identify CPU vendor: {exc}") from exc
+
+        if not is_amd:
+            raise RuntimeError("This AMD-only build does not support non-AMD CPUs")
+
+    def _check_boost_control(self) -> None:
+        if not os.path.isfile(self.BOOST_PATH):
+            status_path = "/sys/devices/system/cpu/amd_pstate/status"
+            amd_pstate_status = "unavailable"
             try:
-                with open(status_path, "r") as f:
-                    status = f.read().strip()
-                if status == "active":
-                    logging.info(
-                        "amd_pstate is in 'active' (EPP) mode: power-profiles-daemon "
-                        "already manages CPU performance natively. Nothing to do, exiting."
-                    )
-                    sys.exit(0)
-            except IOError as e:
-                logging.warning("Could not read amd_pstate status: %s", e)
+                with open(status_path, encoding="ascii") as status_file:
+                    amd_pstate_status = status_file.read().strip()
+            except OSError:
+                pass
+            raise RuntimeError(
+                f"AMD CPU boost control is unavailable at {self.BOOST_PATH} "
+                f"(amd_pstate status: {amd_pstate_status})"
+            )
 
-    def _get_active_profile(self, dbus_name):
-        """Fetch the current ActiveProfile value over DBus for a given namespace."""
-        result = self.bus.call_sync(
-            dbus_name,
-            f"/{dbus_name.replace('.', '/')}",
-            "org.freedesktop.DBus.Properties",
-            "Get",
-            GLib.Variant("(ss)", (dbus_name, "ActiveProfile")),
-            GLib.VariantType("(v)"),
-            Gio.DBusCallFlags.NONE,
-            1000,
-            None
+        try:
+            with open(self.BOOST_PATH, encoding="ascii") as boost_file:
+                current = boost_file.read().strip()
+        except OSError as exc:
+            raise RuntimeError(f"Cannot read {self.BOOST_PATH}: {exc}") from exc
+
+        if current not in {"0", "1"}:
+            raise RuntimeError(f"Unexpected value in {self.BOOST_PATH}: {current!r}")
+
+        logger.debug("AMD boost control found; current value: %s", current)
+
+    async def _get_active_profile(self, destination: str) -> str:
+        assert self.bus is not None
+        object_path = f"/{destination.replace('.', '/')}"
+        reply = await self.bus.call(
+            Message(
+                destination=destination,
+                path=object_path,
+                interface="org.freedesktop.DBus.Properties",
+                member="Get",
+                signature="ss",
+                body=[destination, "ActiveProfile"],
+            )
         )
-        return result.get_child_value(0).get_variant().get_string()
+        if reply is None:
+            raise RuntimeError(f"No D-Bus reply from {destination}")
+        if reply.message_type == MessageType.ERROR:
+            raise DBusError(
+                reply.error_name or "org.freedesktop.DBus.Error.Failed", reply.body
+            )
 
-    def _detect_dbus_namespace(self):
-        """Find the active DBus namespace for power-profiles-daemon."""
+        variant = reply.body[0]
+        profile = variant.value if hasattr(variant, "value") else variant
+        if not isinstance(profile, str):
+            raise TypeError(f"Unexpected ActiveProfile type: {type(profile).__name__}")
+        return profile
+
+    async def _detect_dbus_namespace(self) -> tuple[str, str]:
         for candidate in self.DBUS_CANDIDATES:
             try:
-                self._get_active_profile(candidate)
-                self.dbus_name = candidate
-                self.object_path = f"/{candidate.replace('.', '/')}"
-                logging.debug("Connected to DBus namespace: %s", self.dbus_name)
-                return
-            except Exception:
+                await self._get_active_profile(candidate)
+                object_path = f"/{candidate.replace('.', '/')}"
+                logger.debug(
+                    "Connected to power-profiles-daemon D-Bus name %s", candidate
+                )
+                return candidate, object_path
+            except (DBusError, OSError, TypeError, IndexError):
                 continue
 
-        logging.critical("Could not connect to power-profiles-daemon DBus. Is it running?")
-        sys.exit(1)
+        raise RuntimeError(
+            "Cannot read ActiveProfile from power-profiles-daemon on the system bus"
+        )
 
-    def set_boost(self, enable):
-        """Write the appropriate value to the sysfs control file."""
-        target_val = self.enabled_value if enable else self.disabled_value
+    async def _add_match_rule(self, rule: str) -> None:
+        assert self.bus is not None
+        reply = await self.bus.call(
+            Message(
+                destination=self.DBUS_SERVICE,
+                path=self.DBUS_PATH,
+                interface=self.DBUS_INTERFACE,
+                member="AddMatch",
+                signature="s",
+                body=[rule],
+            )
+        )
+        if reply is not None and reply.message_type == MessageType.ERROR:
+            raise DBusError(
+                reply.error_name or "org.freedesktop.DBus.Error.Failed", reply.body
+            )
 
+    async def _subscribe_to_events(self) -> None:
+        assert self.bus is not None
+
+        await self._add_match_rule(
+            f"type='signal',sender='{self.dbus_name}',path='{self.object_path}',"
+            "interface='org.freedesktop.DBus.Properties',member='PropertiesChanged'"
+        )
+        await self._add_match_rule(
+            f"type='signal',sender='{self.DBUS_SERVICE}',path='{self.DBUS_PATH}',"
+            f"interface='{self.DBUS_INTERFACE}',member='NameOwnerChanged',arg0='{self.dbus_name}'"
+        )
+        await self._add_match_rule(
+            f"type='signal',sender='{self.LOGIN1_NAME}',path='{self.LOGIN1_PATH}',"
+            f"interface='{self.LOGIN1_INTERFACE}',member='PrepareForSleep'"
+        )
+
+        self.bus.add_message_handler(self._on_message)
+
+    def _set_boost(self, enabled: bool, profile: str) -> None:
+        target = "1" if enabled else "0"
         try:
-            with open(self.boost_file, "r") as f:
-                current_val = f.read().strip()
+            with open(self.BOOST_PATH, encoding="ascii") as boost_file:
+                current = boost_file.read().strip()
 
-            if current_val != target_val:
-                with open(self.boost_file, "w") as f:
-                    f.write(target_val)
-                try:
-                    active_profile = self._get_active_profile(self.dbus_name)
-                except Exception:
-                    active_profile = "performance" if enable else "balanced/power-saver"
-                logging.info(
-                    "Set boost to %s (Target mode: %s)",
-                    target_val, active_profile
+            if current == target:
+                logger.debug(
+                    "Boost already %s for profile '%s'; no write needed",
+                    target,
+                    profile,
+                )
+                return
+
+            with open(self.BOOST_PATH, "w", encoding="ascii") as boost_file:
+                boost_file.write(target)
+
+            logger.info(
+                "CPU boost %s (profile: %s)",
+                "enabled" if enabled else "disabled",
+                profile,
+            )
+        except OSError as exc:
+            logger.error("Failed to update CPU boost at %s: %s", self.BOOST_PATH, exc)
+
+    async def sync_current_state(self, reason: str) -> None:
+        try:
+            profile = await self._get_active_profile(self.dbus_name)
+        except (DBusError, OSError, TypeError, IndexError) as exc:
+            logger.warning("Cannot read PPD profile during %s: %s", reason, exc)
+            return
+
+        enabled = self.PROFILE_POLICY.get(profile)
+        if enabled is None:
+            logger.warning(
+                "Unknown PPD profile %r; disabling CPU boost as a safe default", profile
+            )
+            enabled = False
+
+        logger.debug("Synchronizing after %s: profile=%s", reason, profile)
+        self._set_boost(enabled, profile)
+
+    def _on_message(self, msg: Message) -> bool:
+        if msg.message_type != MessageType.SIGNAL:
+            return False
+
+        if (
+            msg.interface == "org.freedesktop.DBus.Properties"
+            and msg.member == "PropertiesChanged"
+            and msg.path == self.object_path
+        ):
+            self._handle_properties_changed(msg.body)
+            return False
+
+        if (
+            msg.interface == self.DBUS_INTERFACE
+            and msg.member == "NameOwnerChanged"
+            and msg.path == self.DBUS_PATH
+        ):
+            self._handle_name_owner_changed(msg.body)
+            return False
+
+        if (
+            msg.interface == self.LOGIN1_INTERFACE
+            and msg.member == "PrepareForSleep"
+            and msg.path == self.LOGIN1_PATH
+        ):
+            self._handle_prepare_for_sleep(msg.body)
+            return False
+
+        return False
+
+    def _handle_properties_changed(self, body: list) -> None:
+        try:
+            changed_interface, changed_properties, invalidated = body
+            if changed_interface != self.dbus_name:
+                return
+
+            if "ActiveProfile" in changed_properties or "ActiveProfile" in invalidated:
+                asyncio.create_task(self.sync_current_state("profile change"))
+        except (TypeError, ValueError) as exc:
+            logger.warning("Could not process PPD PropertiesChanged signal: %s", exc)
+
+    def _handle_name_owner_changed(self, body: list) -> None:
+        try:
+            name, _old_owner, new_owner = body
+            if name != self.dbus_name:
+                return
+
+            if new_owner:
+                logger.info(
+                    "power-profiles-daemon appeared on D-Bus; synchronizing state"
+                )
+                asyncio.create_task(
+                    self.sync_current_state("PPD D-Bus appearance/restart")
                 )
             else:
-                logging.debug("Boost is already set to %s, skipping write.", target_val)
+                logger.warning("power-profiles-daemon disappeared from D-Bus")
+        except (TypeError, ValueError) as exc:
+            logger.warning("Could not process NameOwnerChanged signal: %s", exc)
 
-        except IOError as e:
-            logging.error("Failed writing to %s: %s", self.boost_file, e)
-        except Exception as e:
-            logging.error("Unexpected error in set_boost: %s", e)
-
-    def sync_current_state(self, context=""):
-        """Read the current active profile from DBus and apply the boost state."""
+    def _handle_prepare_for_sleep(self, body: list) -> None:
         try:
-            current_profile = self._get_active_profile(self.dbus_name)
-            logging.debug("%sCurrent profile is '%s'", f"{context}: " if context else "", current_profile)
-            self.set_boost(current_profile == "performance")
-        except Exception as e:
-            logging.warning("Could not read current profile: %s", e)
+            (going_to_sleep,) = body
+        except (TypeError, ValueError) as exc:
+            logger.warning("Could not process PrepareForSleep signal: %s", exc)
+            return
 
-    def on_signal(self, connection, sender_name, object_path, interface_name, signal_name, parameters, user_data):
-        """Callback for DBus PropertiesChanged signal."""
+        if going_to_sleep:
+            logger.debug("System is preparing to sleep")
+            return
+
+        logger.debug("System resumed; scheduling CPU boost resynchronization")
+        if self._resume_task is not None and not self._resume_task.done():
+            self._resume_task.cancel()
+        self._resume_task = asyncio.create_task(self._sync_after_resume())
+
+    async def _sync_after_resume(self) -> None:
         try:
-            if signal_name == "PropertiesChanged":
-                changed_props = parameters.get_child_value(1).unpack()
+            await asyncio.sleep(2)
+            await self.sync_current_state("resume")
+        except asyncio.CancelledError:
+            pass
 
-                if "ActiveProfile" in changed_props:
-                    new_profile = changed_props["ActiveProfile"]
-                    logging.debug("Detected profile change to '%s'", new_profile)
-                    self.set_boost(new_profile == "performance")
-                else:
-                    logging.debug("PropertiesChanged received without ActiveProfile, ignoring.")
-        except Exception as e:
-            logging.error("Error processing signal: %s", e)
-
-    def on_name_appeared(self, connection, name, name_owner):
-        """Callback for when power-profiles-daemon (re)appears on the bus."""
-        logging.debug("power-profiles-daemon (re)appeared on the bus, re-syncing state.")
-        self.sync_current_state(context="RESYNC")
-
-    def on_name_vanished(self, connection, name):
-        """Callback for when power-profiles-daemon disappears from the bus."""
-        logging.warning("power-profiles-daemon disappeared from the bus.")
-
-    def run(self):
-        """Subscribe to events, sync initial state, and start the event loop."""
-        self.bus.signal_subscribe(
-            self.dbus_name,
-            "org.freedesktop.DBus.Properties",
-            "PropertiesChanged",
-            self.object_path,
-            None,
-            Gio.DBusSignalFlags.NONE,
-            self.on_signal,
-            None
-        )
-
-        Gio.bus_watch_name_on_connection(
-            self.bus,
-            self.dbus_name,
-            Gio.BusNameWatcherFlags.NONE,
-            self.on_name_appeared,
-            self.on_name_vanished
-        )
-
-        self.sync_current_state(context="STARTUP")
-
-        logging.debug("Listening for power profile changes...")
-
-        loop = GLib.MainLoop()
+    async def run(self) -> None:
+        self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         try:
-            loop.run()
-        except KeyboardInterrupt:
-            logging.debug("Shutting down gracefully...")
+            self.dbus_name, self.object_path = await self._detect_dbus_namespace()
+            await self._subscribe_to_events()
+            await self.sync_current_state("startup")
+            logger.debug("Monitoring PPD profile changes and system resume events")
+
+            stop_event = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop_event.set)
+
+            await stop_event.wait()
+        finally:
+            if self._resume_task is not None and not self._resume_task.done():
+                self._resume_task.cancel()
+            if self.bus is not None:
+                self.bus.disconnect()
+
+
+def main() -> int:
+    try:
+        asyncio.run(PPDBoostSync().run())
+    except (RuntimeError, DBusError, OSError) as exc:
+        logger.critical("%s", exc)
+        return 1
+    except KeyboardInterrupt:
+        logger.info("Shutting down")
+    return 0
 
 
 if __name__ == "__main__":
-    app = PPDBoostSync()
-    app.run()
+    sys.exit(main())

@@ -1,52 +1,29 @@
 # PPD CPU Boost Sync
 
-A systemd service that automatically synchronizes CPU Turbo Boost with the active "power-profiles-daemon" profile.
+A `systemd` daemon that synchronizes AMD CPU boost (`/sys/devices/system/cpu/cpufreq/boost`) with the active `power-profiles-daemon` profile over D-Bus, handling profile changes, daemon restarts, and system resume events.
 
-_Not applicable to AMD processors with "amd-pstate = active"._
+> **Note:** Designed for AMD processors (`AuthenticAMD`) with `/sys/devices/system/cpu/cpufreq/boost` available.
 
-## How it works
+## How It Works
 
-The script detects the CPU architecture and selects the appropriate sysfs control file:
+The daemon connects to the system D-Bus (`org.freedesktop.UPower.PowerProfiles` or `net.hadess.PowerProfiles`), watches `ActiveProfile` property changes and `systemd-logind` `PrepareForSleep` signals, and writes `1` or `0` to `/sys/devices/system/cpu/cpufreq/boost` only when the target value differs from the current one.
 
-| CPU                  | Control File                                    | Logic           |
-|:---------------------|:------------------------------------------------|:----------------|
-| AMD (cpufreq)        | `/sys/devices/system/cpu/cpufreq/boost`         | `1` = Boost on  |
-| Intel (intel_pstate) | `/sys/devices/system/cpu/intel_pstate/no_turbo` | `0` = Turbo off |
+### Profile Policy
 
-### Profile Logic
-
-| PPD Profile                | Action              | Effect                          |
-|:---------------------------|:--------------------|:--------------------------------|
-| `performance`              | Enable Boost/Turbo  | Maximum performance             |
-| `balanced` / `power-saver` | Disable Boost/Turbo | Less heat and power consumption |
+| PPD Profile | Boost State | `boost` Value | Effect |
+| :--- | :--- | :--- | :--- |
+| `performance` | Enabled | `1` | Maximum boost clocks |
+| `balanced` | Disabled | `0` | Lower heat and power draw |
+| `power-saver` | Disabled | `0` | Maximum power savings |
 
 ## Requirements
 
-_They are usually preinstalled on most systems._
-
-- python
-- python-gobject
-- power-profiles-daemon
-
----
+- `python` (Python 3)
+- `python-dbus-fast` (`dbus_fast`)
+- `power-profiles-daemon`
+- `systemd`
 
 ## Installation
-
-### Arch Linux (AUR)
-
-```bash
-git clone https://aur.archlinux.org/ppd-cpu-boost.git && \
-cd ppd-cpu-boost && \
-makepkg -si
-```
-
-The service is activated automatically after installation. If you need to enable it manually:
-
-```bash
-sudo systemctl enable --now ppd-cpu-boost.service
-```
-
-### Manual
 
 ```bash
 git clone https://github.com/quinsaiz/ppd-cpu-boost.git && \
@@ -58,24 +35,21 @@ sudo ./install.sh
 ### Uninstallation
 
 ```bash
-# AUR
-sudo pacman -Rns ppd-cpu-boost
 
-# Manual
 sudo ./install.sh --uninstall
 ```
 
----
-
-## Diagnostics
+## Diagnostics & Configuration
 
 ```bash
-# Service Status
-systemctl status ppd-cpu-boost
+# Service status
+systemctl status ppd-cpu-boost.service
 
-# Real-time logs
-sudo journalctl -u ppd-cpu-boost -f
+# Live logs
+journalctl -u ppd-cpu-boost.service -f
 
-# Verifying the effect (example for AMD)
-watch -n1 cat /sys/devices/system/cpu/cpufreq/boost
+# Current CPU boost value
+cat /sys/devices/system/cpu/cpufreq/boost
 ```
+
+Set `PPD_BOOST_DEBUG=1` in the `systemd` unit or environment to enable verbose debug logs.

@@ -1,16 +1,30 @@
 [Unit]
 Description=CPU turbo boost sync with power-profiles-daemon
-Requires=power-profiles-daemon.service
-After=graphical.target
+Wants=power-profiles-daemon.service
+After=power-profiles-daemon.service graphical.target
 
 [Service]
 Type=simple
-Environment=PPD_BOOST_DEBUG=0
+Environment=PPD_BOOST_DEBUG=1
 ExecStart=/usr/bin/python3 -u /usr/bin/ppd-cpu-boost
 StandardOutput=journal
 StandardError=journal
 Restart=on-failure
 RestartSec=3s
+StartLimitIntervalSec=60
+StartLimitBurst=5
+SyslogIdentifier=ppd-cpu-boost
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
 
 [Install]
 WantedBy=graphical.target
