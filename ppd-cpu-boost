@@ -27,9 +27,6 @@ class PPDBoostSync:
     DBUS_SERVICE = "org.freedesktop.DBus"
     DBUS_PATH = "/org/freedesktop/DBus"
     DBUS_INTERFACE = "org.freedesktop.DBus"
-    LOGIN1_NAME = "org.freedesktop.login1"
-    LOGIN1_PATH = "/org/freedesktop/login1"
-    LOGIN1_INTERFACE = "org.freedesktop.login1.Manager"
     PROFILE_POLICY: ClassVar[dict[str, bool]] = {
         "performance": True,
         "balanced": False,
@@ -44,7 +41,6 @@ class PPDBoostSync:
         self.bus: MessageBus | None = None
         self.dbus_name: str = ""
         self.object_path: str = ""
-        self._resume_task: asyncio.Task[None] | None = None
 
     @staticmethod
     def _check_root() -> None:
@@ -161,10 +157,6 @@ class PPDBoostSync:
             f"type='signal',sender='{self.DBUS_SERVICE}',path='{self.DBUS_PATH}',"
             f"interface='{self.DBUS_INTERFACE}',member='NameOwnerChanged',arg0='{self.dbus_name}'"
         )
-        await self._add_match_rule(
-            f"type='signal',sender='{self.LOGIN1_NAME}',path='{self.LOGIN1_PATH}',"
-            f"interface='{self.LOGIN1_INTERFACE}',member='PrepareForSleep'"
-        )
 
         self.bus.add_message_handler(self._on_message)
 
@@ -230,14 +222,6 @@ class PPDBoostSync:
             self._handle_name_owner_changed(msg.body)
             return False
 
-        if (
-            msg.interface == self.LOGIN1_INTERFACE
-            and msg.member == "PrepareForSleep"
-            and msg.path == self.LOGIN1_PATH
-        ):
-            self._handle_prepare_for_sleep(msg.body)
-            return False
-
         return False
 
     def _handle_properties_changed(self, body: list) -> None:
@@ -269,29 +253,6 @@ class PPDBoostSync:
         except (TypeError, ValueError) as exc:
             logger.warning("Could not process NameOwnerChanged signal: %s", exc)
 
-    def _handle_prepare_for_sleep(self, body: list) -> None:
-        try:
-            (going_to_sleep,) = body
-        except (TypeError, ValueError) as exc:
-            logger.warning("Could not process PrepareForSleep signal: %s", exc)
-            return
-
-        if going_to_sleep:
-            logger.debug("System is preparing to sleep")
-            return
-
-        logger.debug("System resumed; scheduling CPU boost resynchronization")
-        if self._resume_task is not None and not self._resume_task.done():
-            self._resume_task.cancel()
-        self._resume_task = asyncio.create_task(self._sync_after_resume())
-
-    async def _sync_after_resume(self) -> None:
-        try:
-            await asyncio.sleep(2)
-            await self.sync_current_state("resume")
-        except asyncio.CancelledError:
-            pass
-
     async def run(self) -> None:
         self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
         try:
@@ -307,8 +268,6 @@ class PPDBoostSync:
 
             await stop_event.wait()
         finally:
-            if self._resume_task is not None and not self._resume_task.done():
-                self._resume_task.cancel()
             if self.bus is not None:
                 self.bus.disconnect()
 
